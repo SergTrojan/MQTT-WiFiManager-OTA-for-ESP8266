@@ -1,0 +1,297 @@
+#include <FS.h>                   //this needs to be first, or it all crashes and burns...
+
+#include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
+
+//needed for library
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
+
+#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+
+//Для MQTT
+#include <PubSubClient.h>
+
+//DHT
+//#include "DHT.h"
+
+//OTA
+#include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+
+// ноги:
+const int ciPin_DHT = 2;  //Датчик температуры
+const int ciPin_RelayKettle = 4;  // Реле
+
+// variables will change:
+bool vbRelayState = false;
+int viTemp;
+int viDelaySendData = 10;
+uint32_t vuims_SendTemp = 0, ms;
+
+//define your default values here, if there are different values in config.json, they are overwritten.
+char raw_mqtt_server[40] = "NameServer"; // Имя сервера MQTT
+char raw_mqtt_port[15] = "PortServer"; // Порт для подключения к серверу MQTT
+char raw_mqtt_user[15] = "Login"; // Логин от сервер
+char raw_mqtt_pass[15] = "Password"; // Пароль от сервера
+
+
+char *mqtt_server = raw_mqtt_server; // Имя сервера MQTT
+int mqtt_port =  int(atof(raw_mqtt_port)); // Порт для подключения к серверу MQTT
+char *mqtt_user = raw_mqtt_user; // Логин от сервер
+char *mqtt_pass = raw_mqtt_pass; // Пароль от сервера
+
+// оставляем раскомментированной строчку,
+// соответствующую модели вашего датчика:
+#define DHTTYPE DHT11     // DHT 11
+//#define DHTTYPE DHT21   // DHT 21 (AM2301)
+//#define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
+
+// инициализируем датчик DHT:
+//DHT dht(ciPin_DHT, DHTTYPE);
+
+//Для MQTT
+WiFiClient wclient;
+PubSubClient client(wclient, mqtt_server, mqtt_port);
+
+//flag for saving data
+bool shouldSaveConfig = false;
+
+//callback notifying us of the need to save config
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+  Serial.println();
+
+  //clean FS, for testing
+  //SPIFFS.format();
+
+  //read configuration from FS json
+  Serial.println("mounting FS...");
+
+  if (SPIFFS.begin()) {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json")) {
+      //file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        json.printTo(Serial);
+        if (json.success()) {
+          Serial.println("\nparsed json");
+
+          strcpy(raw_mqtt_server, json["raw_mqtt_server"]);
+          strcpy(raw_mqtt_port, json["raw_mqtt_port"]);
+          strcpy(raw_mqtt_user, json["raw_mqtt_user"]);
+          strcpy(raw_mqtt_pass, json["raw_mqtt_pass"]);
+
+        } else {
+          Serial.println("failed to load json config");
+        }
+        configFile.close();
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
+  //end read
+
+
+
+  // The extra parameters to be configured (can be either global or just in the setup)
+  // After connecting, parameter.getValue() will get you the configured value
+  // id/name placeholder/prompt default length
+  WiFiManagerParameter custom_raw_mqtt_server("raw_server", "raw_mqtt server", raw_mqtt_server, 40);
+  WiFiManagerParameter custom_raw_mqtt_port("raw_port", "raw_mqtt port", raw_mqtt_port, 15);
+  WiFiManagerParameter custom_raw_mqtt_user("raw_mqttuser", "raw_mqtt user", raw_mqtt_user, 15);
+  WiFiManagerParameter custom_raw_mqtt_pass("raw_mqttpass", "raw_mqtt pass", raw_mqtt_pass, 15);
+
+  //WiFiManager
+  //Local intialization. Once its business is done, there is no need to keep it around
+  WiFiManager wifiManager;
+
+  //set config save notify callback
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+  //set static ip
+  //wifiManager.setSTAStaticIPConfig(IPAddress(10,0,1,99), IPAddress(10,0,1,1), IPAddress(255,255,255,0));
+
+  //add all your parameters here
+  wifiManager.addParameter(&custom_raw_mqtt_server);
+  wifiManager.addParameter(&custom_raw_mqtt_port);
+  wifiManager.addParameter(&custom_raw_mqtt_user);
+  wifiManager.addParameter(&custom_raw_mqtt_pass);
+
+  //reset settings - for testing
+  //wifiManager.resetSettings();
+
+  //set minimu quality of signal so it ignores AP's under that quality
+  //defaults to 8%
+  //wifiManager.setMinimumSignalQuality();
+
+  //sets timeout until configuration portal gets turned off
+  //useful to make it all retry or go to sleep
+  //in seconds
+  wifiManager.setTimeout(180);
+
+  //fetches ssid and pass and tries to connect
+  //if it does not connect it starts an access point with the specified name
+  //here  "AutoConnectAP"
+  //and goes into a blocking loop awaiting configuration
+  if (!wifiManager.autoConnect("ESP8266-USATU_AP", "P@ssw0rd")) {
+    Serial.println("failed to connect and hit timeout");
+    delay(3000);
+    //reset and try again, or maybe put it to deep sleep
+    ESP.reset();
+    delay(5000);
+  }
+
+  //if you get here you have connected to the WiFi
+  Serial.println("connected...yeey :)");
+
+  //read updated parameters
+  strcpy(raw_mqtt_server, custom_raw_mqtt_server.getValue());
+  strcpy(raw_mqtt_port, custom_raw_mqtt_port.getValue());
+  strcpy(raw_mqtt_user, custom_raw_mqtt_user.getValue());
+  strcpy(raw_mqtt_pass, custom_raw_mqtt_pass.getValue());
+
+  //save the custom parameters to FS
+  if (shouldSaveConfig) {
+    Serial.println("saving config");
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+    json["raw_mqtt_server"] = raw_mqtt_server;
+    json["raw_mqtt_port"] = raw_mqtt_port;
+    json["raw_mqtt_user"] = raw_mqtt_user;
+    json["raw_mqtt_pass"] = raw_mqtt_pass;
+
+
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile) {
+      Serial.println("failed to open config file for writing");
+    }
+
+    json.printTo(Serial);
+    json.printTo(configFile);
+    configFile.close();
+    //end save
+  }
+
+
+
+  //OTA
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname("ESP8266-USATU-Lamp");
+
+  // No authentication by default
+  ArduinoOTA.setPassword("P@ssw0rd");
+  ArduinoOTA.begin();
+
+  Serial.println("local ip");
+  Serial.println(WiFi.localIP());
+
+  pinMode(ciPin_RelayKettle, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  Serial.println(raw_mqtt_server);
+  Serial.println(raw_mqtt_port);
+
+}
+
+void callback(const MQTT::Publish & pub) {  // Функция получения данных от сервера
+  Serial.print(pub.topic()); // выводим в сериал порт название топика
+  Serial.print(" => ");
+  Serial.print(pub.payload_string()); // выводим в сериал порт значение полученных данных
+
+  String payload = pub.payload_string();
+
+  if (String(pub.topic()) == "Service/TX/DelayData") { // проверяем из нужного ли нам топика пришли данные
+    viDelaySendData = payload.toInt(); // преобразуем полученные данные в тип integer
+    client.publish("Service/RX/DelayData", String(viDelaySendData));
+  }
+  if (String(pub.topic()) == "Service/TX/Relay") { // проверяем из нужного ли нам топика пришли данные
+    vbRelayState = payload.toInt() != 0 ; // преобразуем полученные данные в тип bool
+    client.publish("Service/RX/Relay", String(vbRelayState));
+  }
+  /*if (String(pub.topic()) == "Service/TX/Alarm/Time") { // проверяем из нужного ли нам топика пришли данные
+    vulAlarmTime = payload.toInt() ; //
+    client.publish("Service/RX/Alarm/Time", String(vulAlarmTime));
+    vbAlarmON = true; //
+    client.publish("Service/RX/Alarm/ON", String(vbAlarmON));
+    }
+    if (String(pub.topic()) == "Service/TX/Alarm/ON") { // проверяем из нужного ли нам топика пришли данные
+    vbAlarmON = payload.toInt() != 0 ; //
+    client.publish("Service/RX/Alarm/ON", String(vbAlarmON));
+    }
+    if (String(pub.topic()) == "Service/TX/Timer") { // проверяем из нужного ли нам топика пришли данные
+    viTimerMin = payload.toInt() != 0 ; //
+    client.publish("Service/TX/Timer", String(vbAlarmON));
+    }*/
+}
+void ConnectMQTT() {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!client.connected()) {
+      if (client.connect(MQTT::Connect("USATU")
+                         .set_auth(mqtt_user, mqtt_pass))) {
+        Serial.println("Connected to MQTT server");
+        client.set_callback(callback);
+        client.subscribe("Service/TX/#"); // подписывааемся на все топики Service/Tx в которые нам ложат данные для управления
+      } else {
+        Serial.println("Could not connect to MQTT server");
+        mqtt_port =  int(atof(raw_mqtt_port)); // Порт для подключения к серверу MQTT
+        Serial.println(raw_mqtt_server);
+        Serial.println(raw_mqtt_port);
+
+      }
+    }
+    if (client.connected()) {
+      client.loop();
+    }
+  }
+}
+
+
+
+void loop() {
+  ArduinoOTA.handle();
+  // put your main code here, to run repeatedly:
+  ms = millis();
+  ConnectMQTT();  // подключаемся к MQTT серверу
+  SendData();     // отправляем данные в топики
+
+  digitalWrite(ciPin_RelayKettle, vbRelayState);
+  digitalWrite(LED_BUILTIN, !vbRelayState);
+
+
+}
+void SendData() { //Подготовка данных для передачи
+  if ((ms - vuims_SendTemp) > (viDelaySendData * 1000) && (ms - vuims_SendTemp) > 1000) {         // пауза между отправками значений
+    vuims_SendTemp = ms;
+    //Serial.println("Передача данных");
+    SendTemp();
+  }
+}
+
+void SendTemp() {;
+  // считываем температуру в Цельсиях (по умолчанию):
+//  float t = dht.readTemperature();
+//  float h = dht.readHumidity();
+ // float hic = dht.computeHeatIndex(t, h, false);
+  //if (isnan(t) == false) {
+    //client.publish("Service/RX/Temp", String(hic)); // отправляем в топик для термодатчика температутру
+    //client.publish("Service/RX/Wet", String(h)); // отправляем в топик для термодатчика температутру
+  }
