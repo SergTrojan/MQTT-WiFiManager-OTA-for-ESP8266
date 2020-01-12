@@ -9,11 +9,8 @@
 
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 
-//Для MQTT
-#include <PubSubClient.h>
-
-//DHT
-//#include "DHT.h"
+//needed for MQTT
+#include <PubSubClient.h>         //https://github.com/knolleary/pubsubclient
 
 //OTA
 #include <ESP8266mDNS.h>
@@ -21,14 +18,13 @@
 #include <ArduinoOTA.h>
 
 // ноги:
-const int ciPin_DHT = 2;  //Датчик температуры
 const int ciPin_RelayKettle = 4;  // Реле
 
 // variables will change:
 bool vbRelayState = false;
 int viTemp;
 int viDelaySendData = 10;
-uint32_t vuims_SendTemp = 0, ms;
+uint32_t ms;
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 char raw_mqtt_server[40] = "NameServer"; // Имя сервера MQTT
@@ -41,15 +37,6 @@ char *mqtt_server = raw_mqtt_server; // Имя сервера MQTT
 int mqtt_port =  int(atof(raw_mqtt_port)); // Порт для подключения к серверу MQTT
 char *mqtt_user = raw_mqtt_user; // Логин от сервер
 char *mqtt_pass = raw_mqtt_pass; // Пароль от сервера
-
-// оставляем раскомментированной строчку,
-// соответствующую модели вашего датчика:
-#define DHTTYPE DHT11     // DHT 11
-//#define DHTTYPE DHT21   // DHT 21 (AM2301)
-//#define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
-
-// инициализируем датчик DHT:
-//DHT dht(ciPin_DHT, DHTTYPE);
 
 //Для MQTT
 WiFiClient wclient;
@@ -227,20 +214,6 @@ void callback(const MQTT::Publish & pub) {  // Функция получения
     vbRelayState = payload.toInt() != 0 ; // преобразуем полученные данные в тип bool
     client.publish("Service/RX/Relay", String(vbRelayState));
   }
-  /*if (String(pub.topic()) == "Service/TX/Alarm/Time") { // проверяем из нужного ли нам топика пришли данные
-    vulAlarmTime = payload.toInt() ; //
-    client.publish("Service/RX/Alarm/Time", String(vulAlarmTime));
-    vbAlarmON = true; //
-    client.publish("Service/RX/Alarm/ON", String(vbAlarmON));
-    }
-    if (String(pub.topic()) == "Service/TX/Alarm/ON") { // проверяем из нужного ли нам топика пришли данные
-    vbAlarmON = payload.toInt() != 0 ; //
-    client.publish("Service/RX/Alarm/ON", String(vbAlarmON));
-    }
-    if (String(pub.topic()) == "Service/TX/Timer") { // проверяем из нужного ли нам топика пришли данные
-    viTimerMin = payload.toInt() != 0 ; //
-    client.publish("Service/TX/Timer", String(vbAlarmON));
-    }*/
 }
 void ConnectMQTT() {
   if (WiFi.status() == WL_CONNECTED) {
@@ -271,18 +244,7 @@ void loop() {
   // put your main code here, to run repeatedly:
   ms = millis();
   ConnectMQTT();  // подключаемся к MQTT серверу
-  SendData();     // отправляем данные в топики
 
   digitalWrite(ciPin_RelayKettle, vbRelayState);
   digitalWrite(LED_BUILTIN, !vbRelayState);
-
-
 }
-void SendData() { //Подготовка данных для передачи
-  if ((ms - vuims_SendTemp) > (viDelaySendData * 1000) && (ms - vuims_SendTemp) > 1000) {         // пауза между отправками значений
-    vuims_SendTemp = ms;
-    //Serial.println("Передача данных");
-    SendTemp();
-  }
-}
-
