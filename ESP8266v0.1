@@ -22,9 +22,7 @@ const int ciPin_RelayKettle = 4;  // Реле
 
 // variables will change:
 bool vbRelayState = false;
-int viTemp;
-int viDelaySendData = 10;
-uint32_t ms;
+
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 char raw_mqtt_server[40]; // Имя сервера MQTT
@@ -32,17 +30,10 @@ char raw_mqtt_port[15]; // Порт для подключения к серве�
 char raw_mqtt_user[15]; // Логин от сервер
 char raw_mqtt_pass[15]; // Пароль от сервера
 
-
 char *mqtt_server = raw_mqtt_server; // Имя сервера MQTT
-int mqtt_port;// =  int(atof(raw_mqtt_port)); // Порт для подключения к серверу MQTT
+//int mqtt_port;// =  int(atof(raw_mqtt_port)); // Порт для подключения к серверу MQTT
 char *mqtt_user = raw_mqtt_user; // Логин от сервер
 char *mqtt_pass = raw_mqtt_pass; // Пароль от сервера
-
-//const char *mqtt_server = "m24.cloudmqtt.com";
-//const int mqtt_port = 19214;
-//const char *mqtt_user = "qtjwrtgv";
-//const char *mqtt_pass = "llgwRAh45SDj";
-//const char *mqtt_client_name = "arduinoClient1"; // Client connections cant have the same connection name
 
 //Для MQTT
 WiFiClient espClient;
@@ -115,7 +106,6 @@ void setup() {
 
   //read configuration from FS json
   Serial.println("mounting FS...");
-
   if (SPIFFS.begin()) {
     Serial.println("mounted file system");
     if (SPIFFS.exists("/config.json")) {
@@ -134,12 +124,10 @@ void setup() {
         json.printTo(Serial);
         if (json.success()) {
           Serial.println("\nparsed json");
-
           strcpy(raw_mqtt_server, json["raw_mqtt_server"]);
           strcpy(raw_mqtt_port, json["raw_mqtt_port"]);
           strcpy(raw_mqtt_user, json["raw_mqtt_user"]);
           strcpy(raw_mqtt_pass, json["raw_mqtt_pass"]);
-
         } else {
           Serial.println("failed to load json config");
         }
@@ -232,8 +220,6 @@ void setup() {
     //end save
   }
 
-
-
   //OTA
   // Hostname defaults to esp8266-[ChipID]
   //ArduinoOTA.setHostname("ESP8266-01");
@@ -245,14 +231,8 @@ void setup() {
   Serial.println("local ip");
   Serial.println(WiFi.localIP());
 
-  //pinMode(ciPin_RelayKettle, OUTPUT);
-  //pinMode(LED_BUILTIN, OUTPUT);
-
-
-  //*mqtt_server = raw_mqtt_server; // Имя сервера MQTT
   mqtt_port =  int(atof(raw_mqtt_port)); // Порт для подключения к серверу MQTT
-  //*mqtt_user = raw_mqtt_user; // Логин от сервер
-  //*mqtt_pass = raw_mqtt_pass; // Пароль от сервера
+
   Serial.println(mqtt_server);
   Serial.println(mqtt_port);
   Serial.println(mqtt_user);
@@ -261,6 +241,8 @@ void setup() {
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 
+  //pinMode(ciPin_RelayKettle, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
 
 
 }
@@ -269,7 +251,6 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   // put your main code here, to run repeatedly:
-  ms = millis();
 
   if (!client.connected()) {
     reconnect();
@@ -277,7 +258,7 @@ void loop() {
   client.loop();
 
   unsigned long now = millis();
-  if (now - lastMsg > 2000) {
+  if (now - lastMsg > value) {
     lastMsg = now;
     ++value;
     snprintf (msg, MSG_BUFFER_SIZE, "hello world #%ld", value);
